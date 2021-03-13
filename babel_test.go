@@ -16,17 +16,15 @@ var opts = map[string]interface{}{
 	},
 }
 
-func _TransformWithPool(t *testing.T, n int, p int) {
+func _TransformWithPool(t *testing.T, n int, poolSize int) {
 	input := `let foo = 1`
 	expectedOutput := `var foo = 1;`
 	done := make(chan struct{})
-	if p > 0 {
-		Init(p)
-	}
+	pool, _ := Init(poolSize)
 	for i := 0; i < n; i++ { // make sure pool works by calling Transform multiple times
 		go func(i int) {
 			defer func() { done <- struct{}{} }()
-			output, err := Transform(strings.NewReader(input), opts)
+			output, err := pool.Transform(strings.NewReader(input), opts)
 			assert.Nil(t, err, fmt.Sprintf("Transform(%d) failed", i))
 			var outputBuf bytes.Buffer
 			io.Copy(&outputBuf, output)
@@ -47,23 +45,25 @@ func TestTransformWithPool(t *testing.T) {
 }
 
 func BenchmarkTransformString(b *testing.B) {
+	pool, _ := Init(1)
+	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		TransformString(`let foo = 1`, opts)
+		pool.TransformString(`let foo = 1`, opts)
 	}
 }
 
 func BenchmarkTransformStringWithSingletonPool(b *testing.B) {
-	Init(1)
+	pool, _ := Init(1)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		TransformString(`let foo = 1`, opts)
+		pool.TransformString(`let foo = 1`, opts)
 	}
 }
 
 func BenchmarkTransformStringWithLargePool(b *testing.B) {
-	Init(4)
+	pool, _ := Init(4)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		TransformString(`let foo = 1`, opts)
+		pool.TransformString(`let foo = 1`, opts)
 	}
 }

@@ -20,8 +20,11 @@ import (
 )
 
 func main() {
-	babel.Init(4) // Setup 4 transformers (can be any number > 0)
-	res, err := babel.Transform(strings.NewReader(`let foo = 1;
+	pool, err := babel.Init(4) // Setup 4 transformers (can be any number > 0)
+	if err != nil {
+		panic(err)
+	}
+	res, err := pool.Transform(strings.NewReader(`let foo = 1;
 	<div>
 		Hello JSX!
 		The value of foo is {foo}.

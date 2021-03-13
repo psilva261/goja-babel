@@ -17,56 +17,63 @@ type babelTransformer struct {
 	Transform func(string, map[string]interface{}) (goja.Value, error)
 }
 
-func (t *babelTransformer) Done() {
-	globalpool <- t
+type Pool struct {
+	once *sync.Once
+	ch chan *babelTransformer
+	babelProg *goja.Program
 }
 
-var once = &sync.Once{}
-var globalpool chan *babelTransformer
-var babelProg *goja.Program
-
-func Init(poolSize int) (err error) {
-	once.Do(func() {
-		if e := compileBabel(); e != nil {
+func Init(poolSize int) (p *Pool, err error) {
+	p = &Pool{
+		once: &sync.Once{},
+	}
+	if poolSize == 0 {
+		poolSize = DefaultPoolSize
+	}
+	p.once.Do(func() {
+		if e := p.compileBabel(); e != nil {
 			err = e
 			return
 		}
-		globalpool = make(chan *babelTransformer, poolSize)
+		p.ch = make(chan *babelTransformer, poolSize)
 		for i := 0; i < poolSize; i++ {
 			vm := goja.New()
-			transformFn, e := loadBabel(vm)
+			transformFn, e := p.loadBabel(vm)
 			if e != nil {
 				err = e
 				return
 			}
-			globalpool <- &babelTransformer{Runtime: vm, Transform: transformFn}
+			p.ch <- &babelTransformer{Runtime: vm, Transform: transformFn}
 		}
 	})
 
-	return err
+	return
 }
 
-func Transform(src io.Reader, opts map[string]interface{}) (io.Reader, error) {
+func (p *Pool) Transform(src io.Reader, opts map[string]interface{}) (io.Reader, error) {
 	data, err := ioutil.ReadAll(src)
 	if err != nil {
 		return nil, err
 	}
-	res, err := TransformString(string(data), opts)
+	res, err := p.TransformString(string(data), opts)
 	if err != nil {
 		return nil, err
 	}
 	return strings.NewReader(res), nil
 }
 
-func TransformString(src string, opts map[string]interface{}) (string, error) {
+func (p *Pool) TransformString(src string, opts map[string]interface{}) (string, error) {
 	if opts == nil {
 		opts = map[string]interface{}{}
 	}
-	t, err := getTransformer()
+	t, err := p.getTransformer()
 	if err != nil {
 		return "", err
 	}
-	defer func() { t.Done() }() // Make transformer available again when we're done
+	defer func() {
+		// Make transformer available again when we're done
+		p.ch <- t
+	}()
 	v, err := t.Transform(src, opts)
 	if err != nil {
 		return "", err
@@ -75,26 +82,24 @@ func TransformString(src string, opts map[string]interface{}) (string, error) {
 	return v.ToObject(vm).Get("code").String(), nil
 }
 
-func getTransformer() (*babelTransformer, error) {
+func (p *Pool) getTransformer() (*babelTransformer, error) {
 	// Make sure we have a pool created
-	if len(globalpool) == 0 {
-		if err := Init(DefaultPoolSize); err != nil {
-			return nil, err
-		}
+	if cap(p.ch) == 0 {
+		return nil, fmt.Errorf("pool not initialized")
 	}
 	for {
-		t := <-globalpool
+		t := <-p.ch
 		return t, nil
 	}
 }
 
-func compileBabel() error {
+func (p *Pool) compileBabel() error {
 	babelData, err := _Asset("babel.js")
 	if err != nil {
 		return err
 	}
 
-	babelProg, err = goja.Compile("babel.js", string(babelData), false)
+	p.babelProg, err = goja.Compile("babel.js", string(babelData), false)
 	if err != nil {
 		return err
 	}
@@ -102,8 +107,8 @@ func compileBabel() error {
 	return nil
 }
 
-func loadBabel(vm *goja.Runtime) (func(string, map[string]interface{}) (goja.Value, error), error) {
-	_, err := vm.RunProgram(babelProg)
+func (p *Pool) loadBabel(vm *goja.Runtime) (func(string, map[string]interface{}) (goja.Value, error), error) {
+	_, err := vm.RunProgram(p.babelProg)
 	if err != nil {
 		return nil, fmt.Errorf("unable to load babel.js: %s", err)
 	}
